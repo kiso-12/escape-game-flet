@@ -27,7 +27,11 @@ def main(page: ft.Page):
         "locker_unlocked": False,
         "printer_used": False,
         "action_count": 0,
+        "focus": 100,
+        "hint_count": 0,
+        "wrong_count": 0,
         "cleared": False,
+        "game_over": False,
         "message": "放課後の情報室。夕焼けの光だけがモニターに反射している。",
     }
 
@@ -35,10 +39,13 @@ def main(page: ft.Page):
     clue_view = ft.Column(spacing=8)
     message_text = ft.Text(game_state["message"], size=15, color=INK, selectable=True)
     action_count_text = ft.Text(size=13, color=MUTED)
+    focus_text = ft.Text(size=13, color=INK, weight=ft.FontWeight.BOLD)
+    mistake_text = ft.Text(size=12, color=MUTED)
 
     item_descriptions = {
         "係メモ": "PC係はB2、図書係はA3、ロッカー係はC1。",
         "座席表": "A3=Flet、B2=Linux、C1=青・赤・緑。",
+        "巡回メモ": "非常灯側から見る。色順は逆から読む。",
         "色ログ": "青=3、赤=7、緑=9。",
         "小さな鍵": "ロッカーの物理キー。",
         "ドアカード": "情報室のドアに使うカードキー。",
@@ -63,13 +70,37 @@ def main(page: ft.Page):
         page.show_dialog(ft.SnackBar(ft.Text(message), open=True))
         page.update()
 
-    # 行動回数を増やす。クリア後は調査できないようにする。
+    # 集中力を減らす。0になると先生が戻ってきてゲームオーバー。
+    def lose_focus(amount):
+        game_state["focus"] = max(0, game_state["focus"] - amount)
+        update_status()
+        if game_state["focus"] <= 0 and not game_state["cleared"]:
+            game_state["game_over"] = True
+            show_game_over()
+            return False
+
+        return True
+
+    # 不正解時の共通処理。行動回数だけでなく集中力も減らす。
+    def wrong_answer(message):
+        game_state["wrong_count"] += 1
+        if lose_focus(7):
+            show_message(f"{message}\n\n不正解で集中力が下がった。")
+
+    # 行動回数を増やす。クリア後やゲームオーバー後は調査できないようにする。
     def count_action():
         if game_state["cleared"]:
             show_message("すでに脱出済みだ。もう一度遊ぶ場合はリセットしよう。")
             return False
 
+        if game_state["game_over"]:
+            show_message("先生が戻ってきた後だ。もう一度遊ぶ場合はリセットしよう。")
+            return False
+
         game_state["action_count"] += 1
+        if not lose_focus(1):
+            return False
+
         update_status()
         return True
 
@@ -113,6 +144,19 @@ def main(page: ft.Page):
             clue_view.controls.append(ft.Text("集めた情報はここに整理される。", size=12, color=MUTED))
 
         action_count_text.value = f"行動回数: {game_state['action_count']}"
+        focus_text.value = f"集中力: {game_state['focus']} / 100"
+        mistake_text.value = f"ヒント使用: {game_state['hint_count']} 回 / 不正解: {game_state['wrong_count']} 回"
+
+    # クリア時の評価を計算する。
+    def clear_rank():
+        score = game_state["focus"] - game_state["hint_count"] * 4 - game_state["wrong_count"] * 5
+        if game_state["action_count"] <= 14 and score >= 80:
+            return "S"
+        if game_state["action_count"] <= 18 and score >= 65:
+            return "A"
+        if score >= 45:
+            return "B"
+        return "C"
 
     # 入力が必要な謎をダイアログで表示する。
     def show_input_dialog(title, question, hint, on_submit, password=False):
@@ -202,6 +246,24 @@ def main(page: ft.Page):
 
         show_message("黒板には座席表と、17:40で止まった時計が見える。")
 
+    # 掲示板を調べる。ロッカー番号を逆順に読むための追加ルールを入手する。
+    def check_bulletin(event=None):
+        if not count_action():
+            return
+
+        if "bulletin" not in game_state["checked_places"]:
+            game_state["checked_places"].append("bulletin")
+            add_item("巡回メモ")
+            show_message(
+                "掲示板の隅に、用務員の巡回メモが貼られている。\n\n"
+                "「情報室のロッカーは非常灯側から確認すること」\n"
+                "「窓側に書かれた色順は、非常灯側から見ると逆になる」\n\n"
+                "座席表の色順をそのまま読んではいけないようだ。"
+            )
+            return
+
+        show_message("掲示板には巡回メモが残っている。ロッカーの色順は非常灯側から見る。")
+
     # パソコンを調べる。係メモと座席表を組み合わせてパスワードを解く。
     def check_pc(event=None):
         if not count_action():
@@ -226,7 +288,7 @@ def main(page: ft.Page):
                 )
                 return
 
-            show_message("パスワードが違うようだ。PC係の席番号と座席表をもう一度見直そう。")
+            wrong_answer("パスワードが違うようだ。PC係の席番号と座席表をもう一度見直そう。")
 
         show_input_dialog(
             "パソコン",
@@ -256,7 +318,7 @@ def main(page: ft.Page):
                 show_message("Fletの本を少し引くと、奥から小さな鍵が落ちてきた。")
                 return
 
-            show_message("その本ではなさそうだ。図書係の席番号と座席表を組み合わせよう。")
+            wrong_answer("その本ではなさそうだ。図書係の席番号と座席表を組み合わせよう。")
 
         show_input_dialog(
             "本棚",
@@ -282,8 +344,12 @@ def main(page: ft.Page):
             show_message("鍵穴は回りそうだが、3桁の番号が分からない。色に関するヒントが必要だ。")
             return
 
+        if not has_item("巡回メモ"):
+            show_message("色順は分かったが、ロッカーの向きが気になる。掲示板に管理メモがないか確認しよう。")
+            return
+
         def submit_locker(answer):
-            if answer == "379":
+            if answer == "973":
                 game_state["locker_unlocked"] = True
                 add_item("ドアカード")
                 show_message(
@@ -292,12 +358,12 @@ def main(page: ft.Page):
                 )
                 return
 
-            show_message("番号が違うようだ。ロッカー係の席C1の色順と、パソコンの色ログを合わせよう。")
+            wrong_answer("番号が違うようだ。C1の色順、色ログ、巡回メモの向きを合わせよう。")
 
         show_input_dialog(
             "ロッカー",
             "物理キーは回った。次は3桁の暗証番号だ。",
-            "ロッカー係はC1。座席表のC1は「青・赤・緑」。色ログは青=3、赤=7、緑=9。",
+            "C1は「青・赤・緑」。ただし巡回メモには、非常灯側から見ると逆になるとある。",
             submit_locker,
             password=True,
         )
@@ -340,17 +406,17 @@ def main(page: ft.Page):
             return
 
         def submit_door(answer):
-            if answer == "403794":
+            if answer == "409734":
                 game_state["cleared"] = True
                 show_clear()
                 return
 
-            show_message("ドアのロックは解除されなかった。時刻、ロッカー番号、図書係の答えを整理しよう。")
+            wrong_answer("ドアのロックは解除されなかった。時刻、ロッカー番号、図書係の答えを整理しよう。")
 
         show_input_dialog(
             "情報室のドア",
             "カードリーダーの横に、最後の暗証番号を入力するテンキーがある。",
-            "時刻17:40の下2桁は40。ロッカー番号は379。図書係の答えFletは4文字。",
+            "時刻17:40の下2桁は40。ロッカー番号は973。図書係の答えFletは4文字。",
             submit_door,
             password=True,
         )
@@ -359,7 +425,13 @@ def main(page: ft.Page):
     def show_hint(event=None):
         if game_state["cleared"]:
             show_message("もう脱出済みだ。")
-        elif not has_item("係メモ"):
+            return
+
+        game_state["hint_count"] += 1
+        if not lose_focus(4):
+            return
+
+        if not has_item("係メモ"):
             show_message("まずは机を調べよう。係メモがすべての起点になる。")
         elif not has_item("座席表"):
             show_message("係メモの席番号だけでは解けない。黒板の座席表を確認しよう。")
@@ -367,12 +439,14 @@ def main(page: ft.Page):
             show_message("PC係はB2。座席表のB2に書かれた単語をパソコンに入れる。")
         elif not has_item("小さな鍵"):
             show_message("図書係はA3。座席表のA3に書かれた本を本棚で選ぶ。")
+        elif not has_item("巡回メモ"):
+            show_message("ロッカーの向きを決める情報が足りない。掲示板を確認しよう。")
         elif not game_state["locker_unlocked"]:
-            show_message("ロッカー係はC1。C1の色順と、PCの色ログを組み合わせる。")
+            show_message("C1の色順は青・赤・緑。ただし掲示板の巡回メモにより逆順で読む。")
         elif not has_item("最終メモ"):
             show_message("ロッカーを開けた後は、印刷待ちのプリンタを調べよう。")
         else:
-            show_message("最終メモは、時刻の下2桁、ロッカー番号、図書係の答えの文字数を使う。")
+            show_message("最終メモは、時刻40、ロッカー番号973、Fletの文字数4をつなげる。")
 
     # 見取り図内の調査カードを作る。
     def scene_tile(title, subtitle, icon, color, handler):
@@ -418,8 +492,8 @@ def main(page: ft.Page):
             dialog = ft.AlertDialog(
                 title=ft.Text("遊び方"),
                 content=ft.Text(
-                    "情報室の中の机、黒板、パソコン、本棚、ロッカー、プリンタ、ドアを調べます。\n"
-                    "今回の謎は、1つの場所だけでは解けません。係メモ、座席表、色ログなどを組み合わせてください。"
+                    "情報室の中の机、黒板、掲示板、パソコン、本棚、ロッカー、プリンタ、ドアを調べます。\n"
+                    "行動、ヒント、不正解で集中力が下がります。集中力が0になる前に脱出してください。"
                 ),
                 actions=[ft.ElevatedButton("閉じる", on_click=lambda event: close_dialog())],
             )
@@ -495,6 +569,7 @@ def main(page: ft.Page):
                         [
                             ft.Container(scene_tile("机", "日直の引き出し", ft.Icons.DESK, "#7A4F36", check_desk), col={"xs": 12, "sm": 6, "md": 4}),
                             ft.Container(scene_tile("黒板", "座席表と時計", ft.Icons.CO_PRESENT, "#2F7D5A", check_board), col={"xs": 12, "sm": 6, "md": 4}),
+                            ft.Container(scene_tile("掲示板", "巡回メモ", ft.Icons.PUSH_PIN, "#A96D32", check_bulletin), col={"xs": 12, "sm": 6, "md": 4}),
                             ft.Container(scene_tile("パソコン", "ログイン画面", ft.Icons.COMPUTER, "#2F5F8F", check_pc), col={"xs": 12, "sm": 6, "md": 4}),
                             ft.Container(scene_tile("本棚", "技術書の列", ft.Icons.MENU_BOOK, "#8A5A8D", check_bookshelf), col={"xs": 12, "sm": 6, "md": 4}),
                             ft.Container(scene_tile("ロッカー", "鍵とテンキー", ft.Icons.LOCK, "#5F6670", check_locker), col={"xs": 12, "sm": 6, "md": 4}),
@@ -545,6 +620,11 @@ def main(page: ft.Page):
                     ),
                     item_view,
                     ft.Divider(),
+                    ft.Text("緊張度", size=15, weight=ft.FontWeight.BOLD, color=INK),
+                    ft.ProgressBar(value=game_state["focus"] / 100, color=GREEN, bgcolor="#D8D0C0"),
+                    focus_text,
+                    mistake_text,
+                    ft.Divider(),
                     ft.Text("整理した手がかり", size=15, weight=ft.FontWeight.BOLD, color=INK),
                     clue_view,
                     ft.Divider(),
@@ -567,7 +647,7 @@ def main(page: ft.Page):
                                 ft.Column(
                                     [
                                         ft.Text("放課後の情報室からの脱出", size=26, weight=ft.FontWeight.BOLD, color=INK),
-                                        ft.Text("直接の答えではなく、手がかり同士の関係を読む。", size=13, color=MUTED),
+                                        ft.Text("集中力が0になる前に、手がかり同士の関係を読む。", size=13, color=MUTED),
                                     ],
                                     spacing=2,
                                 ),
@@ -609,13 +689,61 @@ def main(page: ft.Page):
                         ft.Container(expand=1),
                         ft.Icon(ft.Icons.WB_SUNNY, size=82, color="#D7A83E"),
                         ft.Text("脱出成功！", size=38, weight=ft.FontWeight.BOLD, color=GREEN),
+                        ft.Container(
+                            content=ft.Text(f"評価ランク: {clear_rank()}", size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                            padding=ft.Padding(18, 10, 18, 10),
+                            bgcolor=GREEN,
+                            border_radius=8,
+                        ),
                         ft.Text(
-                            f"カードリーダーが緑に変わり、情報室のドアが開いた。\nクリアまでの行動回数: {game_state['action_count']} 回",
+                            "カードリーダーが緑に変わり、情報室のドアが開いた。\n"
+                            f"行動回数: {game_state['action_count']} 回 / 残り集中力: {game_state['focus']} / "
+                            f"ヒント: {game_state['hint_count']} 回 / 不正解: {game_state['wrong_count']} 回",
                             size=16,
                             color=INK,
                             text_align=ft.TextAlign.CENTER,
                         ),
                         ft.ElevatedButton("もう一度遊ぶ", icon=ft.Icons.RESTART_ALT, on_click=lambda event: reset_game()),
+                        ft.Container(expand=1),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=20,
+                ),
+            )
+        )
+        page.update()
+
+    # 集中力が0になったときのゲームオーバー画面を表示する。
+    def show_game_over():
+        page.controls.clear()
+        page.add(
+            ft.Container(
+                expand=True,
+                padding=32,
+                gradient=ft.LinearGradient(
+                    begin=ft.Alignment(-1, -1),
+                    end=ft.Alignment(1, 1),
+                    colors=["#1F2933", "#4B2E2E", "#7A3B2E"],
+                ),
+                content=ft.Column(
+                    [
+                        ft.Container(expand=1),
+                        ft.Icon(ft.Icons.NOTIFICATIONS_ACTIVE, size=78, color="#F4D35E"),
+                        ft.Text("先生が戻ってきた", size=34, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                        ft.Text(
+                            "廊下から足音が近づき、情報室の鍵が開いた。\n"
+                            "考え込んでいる間に、脱出のチャンスを逃してしまった。",
+                            size=16,
+                            color="#F0E6CE",
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Text(
+                            f"行動回数: {game_state['action_count']} 回 / ヒント: {game_state['hint_count']} 回 / 不正解: {game_state['wrong_count']} 回",
+                            size=14,
+                            color="#F0E6CE",
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.ElevatedButton("もう一度挑戦", icon=ft.Icons.RESTART_ALT, on_click=lambda event: reset_game()),
                         ft.Container(expand=1),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -633,7 +761,11 @@ def main(page: ft.Page):
         game_state["locker_unlocked"] = False
         game_state["printer_used"] = False
         game_state["action_count"] = 0
+        game_state["focus"] = 100
+        game_state["hint_count"] = 0
+        game_state["wrong_count"] = 0
         game_state["cleared"] = False
+        game_state["game_over"] = False
         game_state["message"] = "放課後の情報室。夕焼けの光だけがモニターに反射している。"
         message_text.value = game_state["message"]
         update_status()
