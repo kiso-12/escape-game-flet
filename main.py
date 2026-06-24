@@ -13,7 +13,7 @@ YELLOW = "#D7A83E"
 
 
 def main(page: ft.Page):
-    page.title = "放課後の情報室からの脱出"
+    page.title = "放課後の校舎からの脱出"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.theme = ft.Theme(font_family="Meiryo")
     page.window_width = 1040
@@ -23,16 +23,18 @@ def main(page: ft.Page):
     game_state = {
         "items": [],
         "checked_places": [],
+        "current_area": "computer_room",
         "pc_unlocked": False,
         "locker_unlocked": False,
         "printer_used": False,
+        "breaker_fixed": False,
         "action_count": 0,
         "focus": 100,
         "hint_count": 0,
         "wrong_count": 0,
         "cleared": False,
         "game_over": False,
-        "message": "放課後の情報室。夕焼けの光だけがモニターに反射している。",
+        "message": "放課後の情報室。ここを出ても、まだ校舎から脱出しなければならない。",
     }
 
     item_view = ft.Column(spacing=8)
@@ -49,7 +51,10 @@ def main(page: ft.Page):
         "色ログ": "青=3、赤=7、緑=9。",
         "小さな鍵": "ロッカーの物理キー。",
         "ドアカード": "情報室のドアに使うカードキー。",
-        "最終メモ": "最後の暗証番号は、時刻の下2桁 + ロッカー番号 + 図書係の答えの文字数。",
+        "最終メモ": "情報室ドアの暗証番号は、時刻の下2桁 + ロッカー番号 + 図書係の答えの文字数。",
+        "避難経路図": "2階から4番階段を通り、1階の昇降口へ向かう。",
+        "絶縁手袋": "分電盤を安全に操作できる。",
+        "非常口コード": "昇降口の非常口端末に使う4桁コード。",
     }
 
     # 所持アイテムを追加する。すでに持っている場合は重複させない。
@@ -150,11 +155,11 @@ def main(page: ft.Page):
     # クリア時の評価を計算する。
     def clear_rank():
         score = game_state["focus"] - game_state["hint_count"] * 4 - game_state["wrong_count"] * 5
-        if game_state["action_count"] <= 14 and score >= 80:
+        if game_state["action_count"] <= 26 and score >= 72:
             return "S"
-        if game_state["action_count"] <= 18 and score >= 65:
+        if game_state["action_count"] <= 34 and score >= 55:
             return "A"
-        if score >= 45:
+        if score >= 35:
             return "B"
         return "C"
 
@@ -392,7 +397,154 @@ def main(page: ft.Page):
             "最終メモ: 最後の暗証番号は、時刻の下2桁 + ロッカー番号 + 図書係の答えの文字数。"
         )
 
-    # ドアを調べる。最後は複数の手がかりを合成した暗証番号で脱出する。
+    # 現在地を切り替える。別エリアへ移動した感覚を出すため、画面全体を描き直す。
+    def move_area(area_name, message):
+        if not count_action():
+            return
+
+        game_state["current_area"] = area_name
+        game_state["message"] = message
+        message_text.value = message
+        show_game()
+        page.show_dialog(ft.SnackBar(ft.Text(message), open=True))
+        page.update()
+
+    # 廊下の窓を調べる。建物内にいる緊張感を出す調査ポイント。
+    def check_hall_window(event=None):
+        if not count_action():
+            return
+
+        show_message(
+            "廊下の窓から校庭が見える。部活の声はもう遠い。\n"
+            "正門は閉まっているが、昇降口の非常口灯だけがかすかに点いている。"
+        )
+
+    # 階段踊り場を調べる。建物脱出に必要な経路情報を得る。
+    def check_stairs(event=None):
+        if not count_action():
+            return
+
+        if "stairs" not in game_state["checked_places"]:
+            game_state["checked_places"].append("stairs")
+            add_item("避難経路図")
+            show_message(
+                "階段踊り場の壁に避難経路図が貼られている。\n\n"
+                "現在地: 2階 情報室前\n"
+                "経路: 2階 → 4番階段 → 1階 昇降口\n\n"
+                "図の端には、分電盤メモらしき数字「2-4-1」が書き込まれている。"
+            )
+            return
+
+        show_message("避難経路図には、2階から4番階段を通って1階へ下りる経路が示されている。")
+
+    # 準備室へ入る。ドアカードを持っていれば入室できる。
+    def enter_prep_room(event=None):
+        if not has_item("ドアカード"):
+            show_message("準備室のドアにはカードリーダーがある。ドアカードが必要だ。")
+            return
+
+        move_area(
+            "prep_room",
+            "準備室に入った。薬品棚、工具棚、古い分電盤が並び、空気が少し重い。",
+        )
+
+    # 廊下へ戻る。
+    def return_hallway(event=None):
+        move_area("hallway", "廊下に戻った。非常口灯の緑色が、奥の昇降口へ続いている。")
+
+    # 工具棚を調べる。分電盤を操作するためのアイテムを得る。
+    def check_tool_shelf(event=None):
+        if not count_action():
+            return
+
+        if has_item("絶縁手袋"):
+            show_message("工具棚にはドライバーや古いLANケーブルがある。必要なものはもう取った。")
+            return
+
+        add_item("絶縁手袋")
+        show_message(
+            "工具棚から厚手の絶縁手袋を見つけた。\n"
+            "これなら古い分電盤にも触れられそうだ。"
+        )
+
+    # 薬品棚を調べる。雰囲気づくりとミスリードの調査ポイント。
+    def check_chemical_shelf(event=None):
+        if not count_action():
+            return
+
+        show_message(
+            "薬品棚には清掃用アルコールとラベルの剥がれた瓶が並んでいる。\n"
+            "鍵や暗号に関係しそうなものはないが、準備室の静けさが妙に気になる。"
+        )
+
+    # 分電盤を調べる。避難経路図の数字を使って昇降口のロック電源を復旧する。
+    def check_breaker(event=None):
+        if not count_action():
+            return
+
+        if game_state["breaker_fixed"]:
+            show_message("分電盤は復旧済みだ。昇降口の非常口端末にも電源が戻っているはずだ。")
+            return
+
+        if not has_item("絶縁手袋"):
+            show_message("分電盤の金属扉は古く、素手で触るのは危険そうだ。絶縁できるものが必要だ。")
+            return
+
+        if not has_item("避難経路図"):
+            show_message("分電盤には3つのスイッチがある。押す順番の手がかりが必要だ。")
+            return
+
+        def submit_breaker(answer):
+            normalized = answer.replace("-", "").replace(" ", "")
+            if normalized == "241":
+                game_state["breaker_fixed"] = True
+                add_item("非常口コード")
+                show_message(
+                    "分電盤のスイッチを 2 → 4 → 1 の順に入れると、低い機械音が廊下へ響いた。\n\n"
+                    "昇降口の非常口端末に電源が戻り、画面に「EXIT CODE: 6192」と表示された。"
+                )
+                return
+
+            wrong_answer("スイッチの順番が違う。避難経路図の階数と階段番号を見直そう。")
+
+        show_input_dialog(
+            "分電盤",
+            "古い分電盤には、2・4・1のラベルが付いたスイッチがある。",
+            "避難経路図には「2階 → 4番階段 → 1階」と書かれていた。",
+            submit_breaker,
+            password=True,
+        )
+
+    # 昇降口を調べる。建物から出る最後の場面。
+    def check_entrance(event=None):
+        if not count_action():
+            return
+
+        if not game_state["breaker_fixed"]:
+            show_message("昇降口の自動扉は停止している。非常口端末にも電源が来ていない。")
+            return
+
+        if not has_item("非常口コード"):
+            show_message("非常口端末は起動しているが、4桁コードが必要だ。準備室の分電盤に何か表示があったはずだ。")
+            return
+
+        def submit_entrance(answer):
+            if answer == "6192":
+                game_state["cleared"] = True
+                show_clear()
+                return
+
+            wrong_answer("非常口端末のコードが違う。分電盤を復旧したときに表示された数字を思い出そう。")
+
+        show_input_dialog(
+            "昇降口 非常口端末",
+            "非常口灯が緑に点灯している。端末に4桁コードを入力すれば、建物の外へ出られそうだ。",
+            "分電盤を復旧したとき、端末にEXIT CODEが表示されていた。",
+            submit_entrance,
+            password=True,
+        )
+
+    # 情報室のドアを調べる。解除できると建物内の廊下へ移動する。
     def check_door(event=None):
         if not count_action():
             return
@@ -407,8 +559,13 @@ def main(page: ft.Page):
 
         def submit_door(answer):
             if answer == "409734":
-                game_state["cleared"] = True
-                show_clear()
+                game_state["current_area"] = "hallway"
+                game_state["message"] = (
+                    "情報室のドアが開いた。\n"
+                    "しかし外はまだ校舎の中だ。廊下の奥から、非常口灯の緑色だけが見える。"
+                )
+                message_text.value = game_state["message"]
+                show_game()
                 return
 
             wrong_answer("ドアのロックは解除されなかった。時刻、ロッカー番号、図書係の答えを整理しよう。")
@@ -445,8 +602,20 @@ def main(page: ft.Page):
             show_message("C1の色順は青・赤・緑。ただし掲示板の巡回メモにより逆順で読む。")
         elif not has_item("最終メモ"):
             show_message("ロッカーを開けた後は、印刷待ちのプリンタを調べよう。")
+        elif game_state["current_area"] == "computer_room":
+            show_message("情報室ドアの暗証番号を解いたら、建物内の廊下へ進める。")
+        elif game_state["current_area"] == "hallway" and not has_item("避難経路図"):
+            show_message("廊下ではまず階段踊り場を調べよう。建物から出る経路が分かる。")
+        elif game_state["current_area"] == "hallway" and not game_state["breaker_fixed"]:
+            show_message("昇降口は電源が落ちている。準備室に入り、分電盤を調べよう。")
+        elif game_state["current_area"] == "prep_room" and not has_item("絶縁手袋"):
+            show_message("準備室では工具棚を調べよう。分電盤を触る準備が必要だ。")
+        elif game_state["current_area"] == "prep_room" and not game_state["breaker_fixed"]:
+            show_message("避難経路図の 2階 → 4番階段 → 1階 が、分電盤のスイッチ順になる。")
+        elif game_state["current_area"] == "hallway" and game_state["breaker_fixed"]:
+            show_message("昇降口の非常口端末に、分電盤復旧時に表示されたEXIT CODEを入力する。")
         else:
-            show_message("最終メモは、時刻40、ロッカー番号973、Fletの文字数4をつなげる。")
+            show_message("次に進める場所を調べ、必要な手がかりを組み合わせよう。")
 
     # 見取り図内の調査カードを作る。
     def scene_tile(title, subtitle, icon, color, handler):
@@ -518,14 +687,14 @@ def main(page: ft.Page):
                         ft.Container(expand=1),
                         ft.Icon(ft.Icons.COMPUTER, size=74, color="#F4D35E"),
                         ft.Text(
-                            "放課後の情報室からの脱出",
+                            "放課後の校舎からの脱出",
                             size=34,
                             weight=ft.FontWeight.BOLD,
                             color=ft.Colors.WHITE,
                             text_align=ft.TextAlign.CENTER,
                         ),
                         ft.Text(
-                            "夕焼け、止まった時計、印刷待ちの資料。散らばった手がかりを整理してドアを開ける。",
+                            "夕焼けの情報室、暗い廊下、古い準備室。校舎の出口まで手がかりをつないで進む。",
                             size=15,
                             color="#F0E6CE",
                             text_align=ft.TextAlign.CENTER,
@@ -551,30 +720,97 @@ def main(page: ft.Page):
     def show_game():
         update_status()
 
+        area_data = {
+            "computer_room": {
+                "label": "2F 情報室",
+                "title": "情報室 見取り図",
+                "subtitle": "夕焼けに染まるPC教室。ここから校舎脱出が始まる。",
+                "bgcolor": "#ECE5D5",
+                "border": "#CBBCA2",
+                "tiles": [
+                    ("机", "日直の引き出し", ft.Icons.DESK, "#7A4F36", check_desk),
+                    ("黒板", "座席表と時計", ft.Icons.CO_PRESENT, "#2F7D5A", check_board),
+                    ("掲示板", "巡回メモ", ft.Icons.PUSH_PIN, "#A96D32", check_bulletin),
+                    ("パソコン", "ログイン画面", ft.Icons.COMPUTER, "#2F5F8F", check_pc),
+                    ("本棚", "技術書の列", ft.Icons.MENU_BOOK, "#8A5A8D", check_bookshelf),
+                    ("ロッカー", "鍵とテンキー", ft.Icons.LOCK, "#5F6670", check_locker),
+                    ("プリンタ", "印刷待ち", ft.Icons.PRINT, "#D7A83E", check_printer),
+                    ("情報室ドア", "廊下へ出る", ft.Icons.DOOR_FRONT_DOOR, "#C65D3B", check_door),
+                ],
+            },
+            "hallway": {
+                "label": "2F 廊下",
+                "title": "廊下",
+                "subtitle": "消灯した校舎。奥の非常口灯だけが緑に光っている。",
+                "bgcolor": "#D8DEE2",
+                "border": "#AEB9C2",
+                "tiles": [
+                    ("情報室", "戻って調べ直す", ft.Icons.ARROW_BACK, "#5F6670", lambda event: move_area("computer_room", "情報室に戻った。まだ見落としがあるかもしれない。")),
+                    ("廊下の窓", "校庭を確認", ft.Icons.WINDOW, "#486581", check_hall_window),
+                    ("階段踊り場", "避難経路図", ft.Icons.STAIRS, "#2F7D5A", check_stairs),
+                    ("準備室", "カードリーダー", ft.Icons.MEETING_ROOM, "#8A5A8D", enter_prep_room),
+                    ("昇降口", "建物の出口", ft.Icons.EXIT_TO_APP, "#C65D3B", check_entrance),
+                ],
+            },
+            "prep_room": {
+                "label": "2F 準備室",
+                "title": "情報準備室",
+                "subtitle": "古い機材と分電盤が並ぶ薄暗い部屋。",
+                "bgcolor": "#E6E0D4",
+                "border": "#B9A995",
+                "tiles": [
+                    ("廊下へ戻る", "非常口灯の方へ", ft.Icons.ARROW_BACK, "#5F6670", return_hallway),
+                    ("工具棚", "手袋と工具", ft.Icons.HANDYMAN, "#7A4F36", check_tool_shelf),
+                    ("薬品棚", "静かな棚", ft.Icons.SCIENCE, "#5F6670", check_chemical_shelf),
+                    ("分電盤", "3つのスイッチ", ft.Icons.ELECTRICAL_SERVICES, "#D7A83E", check_breaker),
+                ],
+            },
+        }
+        area = area_data[game_state["current_area"]]
+
         room_map = ft.Container(
             padding=16,
-            bgcolor="#ECE5D5",
-            border=border("#CBBCA2"),
+            bgcolor=area["bgcolor"],
+            border=border(area["border"]),
             border_radius=8,
             content=ft.Column(
                 [
+                    ft.Container(
+                        padding=ft.Padding(14, 12, 14, 12),
+                        bgcolor="#1F2933",
+                        border_radius=8,
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.MAP, color="#F4D35E"),
+                                ft.Column(
+                                    [
+                                        ft.Text(area["label"], size=12, color="#F0E6CE"),
+                                        ft.Text(area["subtitle"], size=14, color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD),
+                                    ],
+                                    spacing=2,
+                                    expand=True,
+                                ),
+                            ],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                    ),
                     ft.Row(
                         [
-                            ft.Text("情報室 見取り図", size=18, weight=ft.FontWeight.BOLD, color=INK),
+                            ft.Text(area["title"], size=18, weight=ft.FontWeight.BOLD, color=INK),
                             ft.Text("クリックして調べる", size=12, color=MUTED),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.ResponsiveRow(
                         [
-                            ft.Container(scene_tile("机", "日直の引き出し", ft.Icons.DESK, "#7A4F36", check_desk), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("黒板", "座席表と時計", ft.Icons.CO_PRESENT, "#2F7D5A", check_board), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("掲示板", "巡回メモ", ft.Icons.PUSH_PIN, "#A96D32", check_bulletin), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("パソコン", "ログイン画面", ft.Icons.COMPUTER, "#2F5F8F", check_pc), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("本棚", "技術書の列", ft.Icons.MENU_BOOK, "#8A5A8D", check_bookshelf), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("ロッカー", "鍵とテンキー", ft.Icons.LOCK, "#5F6670", check_locker), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("プリンタ", "印刷待ち", ft.Icons.PRINT, "#D7A83E", check_printer), col={"xs": 12, "sm": 6, "md": 4}),
-                            ft.Container(scene_tile("ドア", "カードリーダー", ft.Icons.DOOR_FRONT_DOOR, "#C65D3B", check_door), col={"xs": 12, "sm": 6, "md": 4}),
+                            *[
+                                ft.Container(
+                                    scene_tile(title, subtitle, icon, color, handler),
+                                    col={"xs": 12, "sm": 6, "md": 4},
+                                )
+                                for title, subtitle, icon, color, handler in area["tiles"]
+                            ],
                         ],
                         spacing=12,
                         run_spacing=12,
@@ -646,7 +882,7 @@ def main(page: ft.Page):
                             [
                                 ft.Column(
                                     [
-                                        ft.Text("放課後の情報室からの脱出", size=26, weight=ft.FontWeight.BOLD, color=INK),
+                                        ft.Text("放課後の校舎からの脱出", size=26, weight=ft.FontWeight.BOLD, color=INK),
                                         ft.Text("集中力が0になる前に、手がかり同士の関係を読む。", size=13, color=MUTED),
                                     ],
                                     spacing=2,
@@ -696,7 +932,8 @@ def main(page: ft.Page):
                             border_radius=8,
                         ),
                         ft.Text(
-                            "カードリーダーが緑に変わり、情報室のドアが開いた。\n"
+                            "昇降口の非常口端末が緑に変わり、自動扉がゆっくり開いた。\n"
+                            "夜の校庭へ出た瞬間、校舎の中の緊張が一気にほどけた。\n"
                             f"行動回数: {game_state['action_count']} 回 / 残り集中力: {game_state['focus']} / "
                             f"ヒント: {game_state['hint_count']} 回 / 不正解: {game_state['wrong_count']} 回",
                             size=16,
@@ -757,16 +994,18 @@ def main(page: ft.Page):
     def reset_game():
         game_state["items"] = []
         game_state["checked_places"] = []
+        game_state["current_area"] = "computer_room"
         game_state["pc_unlocked"] = False
         game_state["locker_unlocked"] = False
         game_state["printer_used"] = False
+        game_state["breaker_fixed"] = False
         game_state["action_count"] = 0
         game_state["focus"] = 100
         game_state["hint_count"] = 0
         game_state["wrong_count"] = 0
         game_state["cleared"] = False
         game_state["game_over"] = False
-        game_state["message"] = "放課後の情報室。夕焼けの光だけがモニターに反射している。"
+        game_state["message"] = "放課後の情報室。ここを出ても、まだ校舎から脱出しなければならない。"
         message_text.value = game_state["message"]
         update_status()
         show_title()
